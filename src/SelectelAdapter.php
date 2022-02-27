@@ -2,17 +2,29 @@
 
 namespace ArgentCrusade\Flysystem\Selectel;
 
+use Exception;
 use League\Flysystem\Config;
-use League\Flysystem\AdapterInterface;
-use League\Flysystem\Adapter\Polyfill\NotSupportingVisibilityTrait;
 use ArgentCrusade\Selectel\CloudStorage\Contracts\ContainerContract;
 use ArgentCrusade\Selectel\CloudStorage\Exceptions\FileNotFoundException;
 use ArgentCrusade\Selectel\CloudStorage\Exceptions\UploadFailedException;
 use ArgentCrusade\Selectel\CloudStorage\Exceptions\ApiRequestFailedException;
+use League\Flysystem\FileAttributes;
+use League\Flysystem\FilesystemAdapter;
+use League\Flysystem\FilesystemException;
+use League\Flysystem\UnableToCheckExistence;
+use League\Flysystem\UnableToCopyFile;
+use League\Flysystem\UnableToCreateDirectory;
+use League\Flysystem\UnableToDeleteDirectory;
+use League\Flysystem\UnableToDeleteFile;
+use League\Flysystem\UnableToMoveFile;
+use League\Flysystem\UnableToReadFile;
+use League\Flysystem\UnableToRetrieveMetadata;
+use League\Flysystem\UnableToSetVisibility;
+use League\Flysystem\UnableToWriteFile;
+use Psr\Http\Message\StreamInterface;
 
-class SelectelAdapter implements AdapterInterface
+class SelectelAdapter implements FilesystemAdapter
 {
-    use NotSupportingVisibilityTrait;
 
     /**
      * Storage container.
@@ -70,25 +82,13 @@ class SelectelAdapter implements AdapterInterface
     /**
      * {@inheritdoc}
      */
-    public function has($path)
-    {
-        return $this->container->files()->exists($path);
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function read($path)
+    public function read($path): string
     {
         try {
-            $file = $this->getFile($path);
+            return $this->getFile($path)->read();
         } catch (FileNotFoundException $e) {
-            return false;
+            throw UnableToReadFile::fromLocation($path, $e->getMessage(), $e);
         }
-
-        $contents = $file->read();
-
-        return compact('contents');
     }
 
     /**
@@ -97,27 +97,25 @@ class SelectelAdapter implements AdapterInterface
     public function readStream($path)
     {
         try {
-            $file = $this->getFile($path);
+            $stream = $this->getFile($path)->readStream();
+            if ($stream instanceof StreamInterface) {
+                $stream->rewind();
+            } else {
+                rewind($stream);
+            }
+            return $stream;
         } catch (FileNotFoundException $e) {
-            return false;
+            throw UnableToReadFile::fromLocation($path, $e->getMessage(), $e);
         }
-
-        $stream = $file->readStream();
-
-        rewind($stream);
-
-        return compact('stream');
     }
 
     /**
      * {@inheritdoc}
      */
-    public function listContents($directory = '', $recursive = false)
+    public function listContents($directory = '', $recursive = false): iterable
     {
         $files = $this->container->files()->withPrefix($directory)->get();
-        $result = $this->transformFiles($files);
-
-        return $result;
+        return $this->transformFiles($files);
     }
 
     /**
@@ -133,41 +131,25 @@ class SelectelAdapter implements AdapterInterface
     /**
      * {@inheritdoc}
      */
-    public function getSize($path)
+    public function write($path, $contents, Config $config): void
     {
-        return $this->getMetadata($path);
+        try {
+            $this->writeToContainer('String', $path, $contents);
+        } catch (Exception $e) {
+            throw UnableToWriteFile::atLocation($path, $e->getMessage(), $e);
+        }
     }
 
     /**
      * {@inheritdoc}
      */
-    public function getMimetype($path)
+    public function writeStream($path, $resource, Config $config): void
     {
-        return $this->getMetadata($path);
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function getTimestamp($path)
-    {
-        return $this->getMetadata($path);
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function write($path, $contents, Config $config)
-    {
-        return $this->writeToContainer('String', $path, $contents);
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function writeStream($path, $resource, Config $config)
-    {
-        return $this->writeToContainer('Stream', $path, $resource);
+        try {
+            $this->writeToContainer('Stream', $path, $resource);
+        } catch (Exception $e) {
+            throw UnableToWriteFile::atLocation($path, $e->getMessage(), $e);
+        }
     }
 
     /**
@@ -184,7 +166,7 @@ class SelectelAdapter implements AdapterInterface
         try {
             $this->container->{'uploadFrom'.$type}($path, $payload);
         } catch (UploadFailedException $e) {
-            return false;
+
         }
 
         return $this->getMetadata($path);
@@ -193,87 +175,50 @@ class SelectelAdapter implements AdapterInterface
     /**
      * {@inheritdoc}
      */
-    public function update($path, $contents, Config $config)
-    {
-        return $this->write($path, $contents, $config);
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function updateStream($path, $resource, Config $config)
-    {
-        return $this->writeStream($path, $resource, $config);
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function rename($path, $newpath)
+    public function copy(string $source, string $destination, Config $config): void
     {
         try {
-            $this->getFile($path)->rename($newpath);
+            $this->getFile($source)->copy($destination);
         } catch (ApiRequestFailedException $e) {
-            return false;
+            throw UnableToCopyFile::fromLocationTo($source, $destination, $e);
         }
-
-        return true;
     }
 
     /**
      * {@inheritdoc}
      */
-    public function copy($path, $newpath)
+    public function delete($path): void
     {
         try {
-            $this->getFile($path)->copy($newpath);
+            $fileContract = $this->getFile($path);
+            $fileContract->delete();
         } catch (ApiRequestFailedException $e) {
-            return false;
+            throw UnableToDeleteFile::atLocation($path, $e->getMessage(), $e);
         }
-
-        return true;
     }
 
     /**
      * {@inheritdoc}
      */
-    public function delete($path)
-    {
-        try {
-            $this->getFile($path)->delete();
-        } catch (ApiRequestFailedException $e) {
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function deleteDir($path)
+    public function deleteDirectory($path): void
     {
         try {
             $this->container->deleteDir($path);
         } catch (ApiRequestFailedException $e) {
-            return false;
+            throw UnableToDeleteDirectory::atLocation($path, $e->getMessage(), $e);
         }
-
-        return true;
     }
 
     /**
      * {@inheritdoc}
      */
-    public function createDir($dirname, Config $config)
+    public function createDirectory(string $path, Config $config): void
     {
         try {
-            $this->container->createDir($dirname);
+            $this->container->createDir($path);
         } catch (ApiRequestFailedException $e) {
-            return false;
+            throw UnableToCreateDirectory::atLocation($path, $e->getMessage());
         }
-
-        return $this->getMetadata($dirname);
     }
 
     /**
@@ -286,5 +231,94 @@ class SelectelAdapter implements AdapterInterface
     public function getUrl($path = '')
     {
         return $this->container->url($path);
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function fileExists(string $path): bool
+    {
+        try {
+            return $this->container->files()->exists($path);
+        } catch (Exception $e) {
+            throw UnableToCheckExistence::forLocation($path, $e);
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function directoryExists(string $path): bool
+    {
+        try {
+            return $this->container->files()->exists($path);
+        } catch (Exception $e) {
+            throw UnableToCheckExistence::forLocation($path, $e);
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function setVisibility(string $path, string $visibility): void
+    {
+        throw UnableToSetVisibility::atLocation($path, $visibility, new Exception('Unsupported.'));
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function visibility(string $path): FileAttributes
+    {
+        throw UnableToRetrieveMetadata::visibility($path, 'Unsupported.');
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function mimeType(string $path): FileAttributes
+    {
+        try {
+            return new FileAttributes($path, null, null, null, $this->getFile($path)->contentType());
+        } catch (Exception $e) {
+            throw UnableToRetrieveMetadata::mimeType($path, $e->getMessage(), $e);
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function lastModified(string $path): FileAttributes
+    {
+        try {
+            return new FileAttributes($path, null, null, strtotime($this->getFile($path)->lastModifiedAt()) ?: 0);
+        } catch (Exception $e) {
+            throw UnableToRetrieveMetadata::lastModified($path, $e->getMessage(), $e);
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function fileSize(string $path): FileAttributes
+    {
+        try {
+            return new FileAttributes($path, $this->getFile($path)->size());
+        } catch (Exception $e) {
+            throw UnableToRetrieveMetadata::fileSize($path, $e->getMessage(), $e);
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function move(string $source, string $destination, Config $config): void
+    {
+        try {
+            $this->copy($source, $destination, $config);
+            $this->delete($source);
+        } catch (FilesystemException $e) {
+            throw UnableToMoveFile::fromLocationTo($source, $destination, $e);
+        }
     }
 }

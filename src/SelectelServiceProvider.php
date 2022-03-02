@@ -5,6 +5,7 @@ namespace ArgentCrusade\Flysystem\Selectel;
 use League\Flysystem\Filesystem;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Filesystem\FilesystemAdapter;
 use ArgentCrusade\Selectel\CloudStorage\CloudStorage;
 use ArgentCrusade\Selectel\CloudStorage\Api\ApiClient;
 
@@ -26,15 +27,13 @@ class SelectelServiceProvider extends ServiceProvider
                 $container->setUrl($config['container_url']);
             }
 
-            return new Filesystem(new SelectelAdapter($container));
-        });
-    }
+            $adapter = new SelectelAdapter($container);
 
-    /**
-     * Register the application services.
-     */
-    public function register()
-    {
-        //
+            return new FilesystemAdapter(
+                new Filesystem($adapter, $config),
+                $adapter,
+                $config
+            );
+        });
     }
 }

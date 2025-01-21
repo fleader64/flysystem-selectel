@@ -6,7 +6,7 @@
     "license": "MIT",
     "require": {
         "php": ">=8.0",
-        "league/flysystem": "3.0.9",
+        "league/flysystem": "^3.8",
         "argentcrusade/selectel-cloud-storage": "dev-master"
     },
     "require-dev": {
